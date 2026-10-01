@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
 import android.os.SystemProperties
+import android.provider.Settings
 import moe.shizuku.manager.ShizukuApplication
 import moe.shizuku.manager.ShizukuSettings
 import com.topjohnwu.superuser.Shell
@@ -39,6 +40,20 @@ object EnvironmentUtils {
 
     fun isRooted(): Boolean {
         return Shell.getShell().isRoot
+    }
+
+    /**
+     * Whether USB debugging (ADB) is enabled.
+     *
+     * Starting with Android 17 (API 37), Settings.Global.ADB_ENABLED always reads as 0 for
+     * third-party apps, regardless of the real value, so a 0 there no longer means USB debugging
+     * is off. On API 37+ we therefore can't gate on it; if ADB really is off, the subsequent ADB
+     * connection fails and is reported through the normal error path.
+     */
+    @JvmStatic
+    fun isAdbEnabled(): Boolean {
+        if (Settings.Global.getInt(appContext.contentResolver, Settings.Global.ADB_ENABLED, 0) > 0) return true
+        return Build.VERSION.SDK_INT >= 37
     }
 
     fun getAdbTcpPort(): Int {
