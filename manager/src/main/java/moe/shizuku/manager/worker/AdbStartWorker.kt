@@ -10,6 +10,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.database.ContentObserver
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -202,14 +204,32 @@ class AdbStartWorker(context: Context, params: WorkerParameters) : CoroutineWork
     }
 
     companion object {
-        fun enqueue(context: Context) {
+        /**
+         * Wireless ADB can only start over Wi-Fi. [NetworkType.UNMETERED] is not a Wi-Fi test: cellular
+         * plans that report NOT_METERED satisfy it, so the worker ran with no Wi-Fi and hit its
+         * mDNS timeout. From API 28 ask for the Wi-Fi transport itself instead:
+         *  - metered Wi-Fi (a phone hotspot) is accepted, so no NOT_METERED capability is required;
+         *  - NOT_VPN is removed because NetworkRequest.Builder adds it by default, and a VPN network
+         *    carries TRANSPORT_VPN plus the transports of its underlying networks but not NOT_VPN, so
+         *    the default request would reject Wi-Fi that is behind an active VPN.
+         * Below API 28 WorkManager ignores network requests and no Wi-Fi-only [NetworkType] exists, so
+         * UNMETERED stays as the closest approximation there.
+         */
+        internal fun buildConstraints(wifiRequired: Boolean): Constraints {
             val cb = Constraints.Builder()
-            if (EnvironmentUtils.isWifiRequired())
-                cb.setRequiredNetworkType(NetworkType.UNMETERED)
-            val constraints = cb.build()
+            if (wifiRequired) {
+                val wifi = NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .build()
+                cb.setRequiredNetworkRequest(wifi, NetworkType.UNMETERED)
+            }
+            return cb.build()
+        }
 
+        fun enqueue(context: Context) {
             val request = OneTimeWorkRequestBuilder<AdbStartWorker>()
-                .setConstraints(constraints)
+                .setConstraints(buildConstraints(EnvironmentUtils.isWifiRequired()))
                 .build()
 
             WorkManager.getInstance(context).enqueueUniqueWork(

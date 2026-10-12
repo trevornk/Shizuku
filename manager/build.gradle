@@ -31,6 +31,12 @@ android {
     signingConfigs {
         sign {}
     }
+    testOptions {
+        unitTests {
+            // WorkManager reads its own resources (R.bool.*) when it initialises.
+            includeAndroidResources = true
+        }
+    }
     buildTypes {
         debug {
             signingConfig = signingConfigs.sign
@@ -203,6 +209,41 @@ dependencies {
     implementation "org.lsposed.hiddenapibypass:hiddenapibypass:6.1"
 
     implementation "me.zhanghai.android.appiconloader:appiconloader:1.5.0"
+
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.robolectric:robolectric:4.16"
 }
 
 apply from: rootProject.file("signing.gradle")
+
+// Unit tests only. dev.rikka.tools.refine instruments every dependency jar through AGP's ASM API
+// (InstrumentationScope.ALL) but keeps the META-INF signature files, so signed jars that Robolectric
+// loads (BouncyCastle, Conscrypt) fail JarVerifier with "SHA-256 digest error". Strip the signatures
+// from the copies used on the test classpath; app/release outputs are unaffected.
+tasks.withType(Test).configureEach { testTask ->
+    doFirst {
+        def outDir = new File(buildDir, "tmp/unsigned-test-jars/${testTask.name}")
+        outDir.deleteDir()
+        outDir.mkdirs()
+        testTask.classpath = files(testTask.classpath.files.withIndex().collect { File f, int i ->
+            if (!f.isFile() || !f.name.endsWith(".jar")) return f
+            def signature = ~/META-INF\/[^\/]+\.(SF|RSA|DSA|EC)/
+            def zip = new java.util.zip.ZipFile(f)
+            try {
+                if (!zip.entries().any { it.name ==~ signature }) return f
+                def out = new File(outDir, "${i}-${f.name}")
+                new java.util.zip.ZipOutputStream(out.newOutputStream()).withCloseable { zos ->
+                    zip.entries().each { e ->
+                        if (e.name ==~ signature) return
+                        zos.putNextEntry(new java.util.zip.ZipEntry(e.name))
+                        if (!e.isDirectory()) zip.getInputStream(e).withCloseable { it.transferTo(zos) }
+                        zos.closeEntry()
+                    }
+                }
+                return out
+            } finally {
+                zip.close()
+            }
+        })
+    }
+}
